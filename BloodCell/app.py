@@ -1,11 +1,14 @@
 import numpy as np
 import cv2
+from PIL import Image
 
-
-flags = [i for i in dir(cv2) if i.startswith('COLOR_')]
-print(flags)
+#flags = [i for i in dir(cv2) if i.startswith('COLOR_')]
+#print(flags)
 
 class Test:
+
+    RGB_SCALE = 255;
+    CMYK_SCALE = 0;
 
     def __init__(self):
         pass
@@ -115,20 +118,24 @@ class Test:
         im_lut= cv2.LUT(image, table)
         self.show_image(im_lut)
 
-    def main_test(self,image):
-        im = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        #cv2.medianBlur(im,7,im)
-        #cv2.equalizeHist(im,im)
-        #im_th,th=cv2.threshold(im,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-        self.show_image(im)
+    def rgb_to_cmyk(imPath):
+        im = Image.open(imPath).convert('CMYK')
+        np_image = np.array(im)
+        c = np_image[:, :, 0]
+        m = np_image[:, :, 1]
+        y = np_image[:, :, 2]
+        k = np_image[:, :, 3]
 
-cv2.namedWindow("output", cv2.WINDOW_NORMAL)
+        return (c, m ,y, k);
+
+
+cv2.namedWindow("output", cv2.WINDOW_KEEPRATIO)
 img = cv2.imread("resources/IMG_3643.jpg")
 
-
-kmeans=Test.k_means(Test,img,5);
-result=Test.color_thresholding(Test,kmeans)
-Test.show_image(result)
+cmyk=Test.rgb_to_cmyk("resources/IMG_3643.jpg");
+img=cv2.medianBlur(cmyk[1],9,img);
+kmeans=Test.k_means(Test,img,2);
+Test.show_image(kmeans);
 
 #Test.show_images_multiple(kmeans,kmeans2,"output","output2")
 
