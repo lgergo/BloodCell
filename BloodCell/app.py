@@ -1,15 +1,14 @@
 import numpy as np
 import cv2
-from PIL import Image
 #Python imaging library
+from PIL import Image
 
-#flags = [i for i in dir(cv2) if i.startswith('COLOR_')]
-#print(flags)
 
 class ImageProcessor:
 
-    RGB_SCALE = 255;
-    CMYK_SCALE = 0;
+    RGB_SCALE = 255
+    CMYK_SCALE = 0
+    MIN_AREA=2000
 
     def __init__(self):
         pass
@@ -46,7 +45,7 @@ class ImageProcessor:
         im = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
         return im
 
-    def ycb(image):
+    def yCrCb(image):
         im = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
         return im
 
@@ -101,15 +100,15 @@ class ImageProcessor:
         numpy_vertical_concat = np.hstack(cv2.split(image))
         self.show_image(numpy_vertical_concat)
 
-    # def color_thresholding(self, image):
-    #     im = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-    #     mask = cv2.inRange(im, (110, 25, 25), (180, 255, 255))
-    #
-    #     imask = mask > 0
-    #     green = np.zeros_like(img, np.uint8)
-    #     green[imask] = img[imask]
-    #
-    #     return green
+    def color_thresholding(self, image):
+        im = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        mask = cv2.inRange(im, (110, 25, 25), (180, 255, 255))
+
+        imask = mask > 0
+        green = np.zeros_like(img, np.uint8)
+        green[imask] = img[imask]
+
+        return green
 
     def adjust_gamma(image, gamma=1.0):
         # build a lookup table mapping the pixel values [0, 255] to
@@ -117,7 +116,6 @@ class ImageProcessor:
         invGamma = 1.0 / gamma
         table = np.array([((i / 255.0) ** invGamma) * 255
                           for i in np.arange(0, 256)]).astype("uint8")
-
         # apply gamma correction using the lookup table
         im_lut = cv2.LUT(image, table)
         return im_lut
@@ -157,57 +155,62 @@ class ImageProcessor:
         blue = cv2.equalizeHist(b)
         return cv2.merge((blue, green, red))
 
-    def contouring(imOriginal, thresholded):
-        contours, hierarchy = cv2.findContours(thresholded,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-        #cnt = contours[0]
-        #M = cv2.moments(cnt)
-        #print(M)
-
-        #TODO hova kell berakni az approxot
-        # for x in contours:
-        #     epsilon = 0.1*cv2.arcLength(x,True)
-        #     approx = cv2.approxPolyDP(x,epsilon,True)
-
-        cv2.drawContours(imOriginal, contours,-1, (0,0,255), 3,cv2.LINE_4,hierarchy,1,None)
-
-        return
-
     def find_nucleus(img, channel, k):
-        imBlur = cv2.medianBlur(img[:, :, channel], 5)
-        kmeans = ImageProcessor.k_means(imBlur, k)
-        thresh = cv2.threshold(kmeans, 127, 255, cv2.THRESH_BINARY)
+        blur = cv2.GaussianBlur(img[:, :, channel],(5,5),1)
+        ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
         kernel = np.zeros((11, 11), np.uint8)
-        imMorph = thresh[1].copy()
+        imMorph = th3.copy()
         cv2.morphologyEx(imMorph, cv2.MORPH_CLOSE, kernel,None,None,5)
-        return  imMorph
+        return imMorph
+
+    def contouring(imOriginal, thresholded):
+        contours, hierarchy = cv2.findContours(thresholded,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+        contoursSorted = sorted(contours, key=lambda x: cv2.contourArea(x))
+        del contoursSorted[-1]
+        new_list = [item for item in contoursSorted if cv2.contourArea(item)>ImageProcessor.MIN_AREA]
+
+        cv2.drawContours(imOriginal, new_list,-1, (0,0,255), 3,cv2.LINE_4)
+
+        return len(new_list)
+
+    def approxPoly(contourList, threshold):
+        approxed = []
+        for item in contourList:
+            epsilon = threshold * cv2.arcLength(item, True)
+            approx = cv2.approxPolyDP(item, epsilon, True)
+            approxed.append(approx)
+        return approxed
+
+    def drawText(img, text, x, y):
+        cv2.putText(img, 'WBC count: '+str(text), (x, y), cv2.FONT_HERSHEY_SIMPLEX,5, [255,255,255],6,cv2.LINE_8)
 
 cv2.namedWindow("output", cv2.WINDOW_KEEPRATIO)
-#cv2.namedWindow("output2", cv2.WINDOW_KEEPRATIO)
-img = cv2.imread("resources/IMG_3643.jpg")
-
-print(cv2.getVersionString())
-
-imCmyk=ImageProcessor.rgb_to_cmyk("resources/IMG_3643.jpg")
-im1=ImageProcessor.lab(img)
-im2=ImageProcessor.xyz(img)
-im3=ImageProcessor.hsv(img) #[0]: wcb mag és rbc de nincs cyto; [1]: CCA; [2]: nincs wbc mag
-im4=ImageProcessor.hls(img) #[0]: wcb mag és rbc de nincs cyto; [1]: nincs wbc mag; [2]: CCA
-im5=ImageProcessor.ycb(img)
-im6=ImageProcessor.luv(img)
-im7=ImageProcessor.yuv(img)
-
-# WCB szempontjából jó csatornák:
-# [0] : hsv, hls, ycb, luv, yuv
-# [1] : lab, xyz, hsv, ycb, luv, cmyk
-# [2] : hsv, hls, yuv
-
-#imsum= cv2.convertScaleAbs(imCmyk[:,:,1], 1, 1.9)
+resPath="resources/IMG_3643.jpg"
+img = cv2.imread(resPath)
+imCmyk=ImageProcessor.rgb_to_cmyk(resPath)
 
 imcres=ImageProcessor.find_nucleus(imCmyk,1,2)
-ImageProcessor.contouring(img, imcres)
+contourCount=ImageProcessor.contouring(img, imcres)
+ImageProcessor.drawText(img,contourCount,100,200)
 
 ImageProcessor.show_image(img)
 
-#Test.show_images_multiple(imcres,imhsvres,"output","output2")
+
+
+#########################################
+# im1=ImageProcessor.lab(img)
+# im2=ImageProcessor.xyz(img)
+# im3=ImageProcessor.hsv(img) #[0]: wcb mag és rbc de nincs cyto; [1]: CCA; [2]: nincs wbc mag
+# im4=ImageProcessor.hls(img) #[0]: wcb mag és rbc de nincs cyto; [1]: nincs wbc mag; [2]: CCA
+# im5=ImageProcessor.ycb(img)
+# im6=ImageProcessor.luv(img)
+# im7=ImageProcessor.yuv(img)
+#
+# # WCB szempontjából jó csatornák:
+# # [0] : hsv, hls, ycb, luv, yuv
+# # [1] : lab, xyz, hsv, ycb, luv, cmyk
+# # [2] : hsv, hls, yuv
+#################################################
+
 
 
