@@ -158,20 +158,25 @@ class ImageProcessor:
     def find_nucleus(img, channel, k):
         blur = cv2.GaussianBlur(img[:, :, channel],(5,5),1)
         ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+        #th3 = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+
         kernel = np.zeros((11, 11), np.uint8)
         imMorph = th3.copy()
+        cv2.morphologyEx(imMorph, cv2.MORPH_OPEN, kernel,None,None,5)
         cv2.morphologyEx(imMorph, cv2.MORPH_CLOSE, kernel,None,None,5)
         return imMorph
 
     def contouring(imOriginal, thresholded):
-        contours, hierarchy = cv2.findContours(thresholded,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+        contours, hierarchy = cv2.findContours(thresholded,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         contoursSorted = sorted(contours, key=lambda x: cv2.contourArea(x))
         del contoursSorted[-1]
         new_list = [item for item in contoursSorted if cv2.contourArea(item)>ImageProcessor.MIN_AREA]
+        approxed_list=ImageProcessor.approxPoly(new_list,0.015);
+        cv2.drawContours(imOriginal, approxed_list,-1, (0,0,255), 3,cv2.LINE_4)
 
-        cv2.drawContours(imOriginal, new_list,-1, (0,0,255), 3,cv2.LINE_4)
+        # TODO plates count
 
-        return len(new_list)
+        return len(approxed_list)
 
     def approxPoly(contourList, threshold):
         approxed = []
