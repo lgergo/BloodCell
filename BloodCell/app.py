@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+from matplotlib import pyplot as plt
 #Python imaging library
 from PIL import Image
 
@@ -8,7 +9,8 @@ class ImageProcessor:
 
     RGB_SCALE = 255
     CMYK_SCALE = 0
-    MIN_AREA=2000
+    WBC_MIN_AREA=1500
+    PLATES_MIN_AREA=50
 
     def __init__(self):
         pass
@@ -129,8 +131,15 @@ class ImageProcessor:
         k = np_image[:, :, 3]
         return (c, m ,y, k)
 
-    def rgb_to_cmyk(imPath):
+    def rgb_to_cmyk_fromPath(imPath):
         im= Image.open(imPath).convert('CMYK')
+        np_image = np.array(im)
+        result=np_image[:, :, :]
+        return result
+
+    def rgb_to_cmyk(image):
+        img = Image.fromarray(image, 'RGB')
+        im= img.convert('CMYK')
         np_image = np.array(im)
         result=np_image[:, :, :]
         return result
@@ -155,28 +164,44 @@ class ImageProcessor:
         blue = cv2.equalizeHist(b)
         return cv2.merge((blue, green, red))
 
+    def lut_transform(img):
+        xp = [0, 64, 128, 192, 255]
+        fp = [0, 16, 128, 240, 255]
+        x = np.arange(256)
+        table = np.interp(x, xp, fp).astype('uint8')
+        lut_img = cv2.LUT(img, table)
+        return lut_img
+
     def find_nucleus(img, channel, k):
-        blur = cv2.GaussianBlur(img[:, :, channel],(5,5),1)
-        ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-        #th3 = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        blur = cv2.GaussianBlur(img[:, :, channel],(9,9),1)
+        ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_OTSU)
 
         kernel = np.zeros((11, 11), np.uint8)
         imMorph = th3.copy()
+        cv2.dilate(imMorph,kernel,None,None,10)
         cv2.morphologyEx(imMorph, cv2.MORPH_OPEN, kernel,None,None,5)
         cv2.morphologyEx(imMorph, cv2.MORPH_CLOSE, kernel,None,None,5)
         return imMorph
+
+    def plotHistogram(image):
+        histg = cv2.calcHist([image], [0], None, [256], [0, 256])
+        plt.plot(histg)
+        plt.show()
 
     def contouring(imOriginal, thresholded):
         contours, hierarchy = cv2.findContours(thresholded,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         contoursSorted = sorted(contours, key=lambda x: cv2.contourArea(x))
         del contoursSorted[-1]
-        new_list = [item for item in contoursSorted if cv2.contourArea(item)>ImageProcessor.MIN_AREA]
-        approxed_list=ImageProcessor.approxPoly(new_list,0.015);
-        cv2.drawContours(imOriginal, approxed_list,-1, (0,0,255), 3,cv2.LINE_4)
 
-        # TODO plates count
+        wbclist = [item for item in contoursSorted if cv2.contourArea(item) > ImageProcessor.WBC_MIN_AREA]
+        platelist = [item for item in contoursSorted if cv2.contourArea(item) > ImageProcessor.PLATES_MIN_AREA and cv2.contourArea(item) < ImageProcessor.WBC_MIN_AREA]
+        approxed_wbcList=ImageProcessor.approxPoly(wbclist,0.015);
+        approxed_plateList=ImageProcessor.approxPoly(platelist,0.01);
 
-        return len(approxed_list)
+        cv2.drawContours(imOriginal, approxed_wbcList,-1, (0,0,255), 3,cv2.LINE_4)
+        cv2.drawContours(imOriginal, approxed_plateList, -1, (0, 255, 0), 3, cv2.LINE_4)
+
+        return len(approxed_wbcList),len(approxed_plateList)
 
     def approxPoly(contourList, threshold):
         approxed = []
@@ -186,21 +211,22 @@ class ImageProcessor:
             approxed.append(approx)
         return approxed
 
-    def drawText(img, text, x, y):
-        cv2.putText(img, 'WBC count: '+str(text), (x, y), cv2.FONT_HERSHEY_SIMPLEX,5, [255,255,255],6,cv2.LINE_8)
+    def drawText(img, text, x, y, color):
+        cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,5, color ,6,cv2.LINE_8)
 
 cv2.namedWindow("output", cv2.WINDOW_KEEPRATIO)
 resPath="resources/IMG_3643.jpg"
 img = cv2.imread(resPath)
-imCmyk=ImageProcessor.rgb_to_cmyk(resPath)
 
-imcres=ImageProcessor.find_nucleus(imCmyk,1,2)
-contourCount=ImageProcessor.contouring(img, imcres)
-ImageProcessor.drawText(img,contourCount,100,200)
+img_lut=ImageProcessor.lut_transform(img)
+imCmyk=ImageProcessor.rgb_to_cmyk(img_lut)
+
+imtresh=ImageProcessor.find_nucleus(imCmyk,1,2)
+wbcCount,platesCount=ImageProcessor.contouring(img, imtresh)
+ImageProcessor.drawText(img,'Platelet: '+str(platesCount),100,200,[0,255,0])
+ImageProcessor.drawText(img,'WBC: '+str(wbcCount),100,400,[0,0,255])
 
 ImageProcessor.show_image(img)
-
-
 
 #########################################
 # im1=ImageProcessor.lab(img)
@@ -217,5 +243,9 @@ ImageProcessor.show_image(img)
 # # [2] : hsv, hls, yuv
 #################################################
 
+# normalize float versions
+#norm_img1 = cv2.normalize(img[:, :, channel], None, alpha=0, beta=300, norm_type=cv2.NORM_MINMAX, dtype=-1)
+# norm_img1 = cv2.normalize(img[:, :, channel], None, alpha=0, beta=1.2, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+#norm_img1 = (255 * norm_img1).astype(np.uint8)
 
 
