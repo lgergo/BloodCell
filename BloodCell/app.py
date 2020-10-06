@@ -165,16 +165,21 @@ class ImageProcessor:
         return cv2.merge((blue, green, red))
 
     def lut_transform(img):
-        xp = [0, 64, 128, 192, 255]
-        fp = [0, 16, 128, 240, 255]
+        xp = [0, 64, 128, 192, 255]  #lut_in
+        fp = [0, 16, 128, 240, 255]  #lut_out
         x = np.arange(256)
         table = np.interp(x, xp, fp).astype('uint8')
         lut_img = cv2.LUT(img, table)
         return lut_img
 
-    def find_nucleus(img, channel, k):
+    def plotHistogram(image):
+        histg = cv2.calcHist([image], [0], None, [256], [0, 256])
+        plt.plot(histg)
+        plt.show()
+
+    def find_nucleus(img, channel):
         blur = cv2.GaussianBlur(img[:, :, channel],(9,9),1)
-        ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_OTSU)
+        ret3, th3 = cv2.threshold(blur, 151, 255, cv2.THRESH_BINARY)
 
         kernel = np.zeros((11, 11), np.uint8)
         imMorph = th3.copy()
@@ -183,15 +188,10 @@ class ImageProcessor:
         cv2.morphologyEx(imMorph, cv2.MORPH_CLOSE, kernel,None,None,5)
         return imMorph
 
-    def plotHistogram(image):
-        histg = cv2.calcHist([image], [0], None, [256], [0, 256])
-        plt.plot(histg)
-        plt.show()
-
     def contouring(imOriginal, thresholded):
         contours, hierarchy = cv2.findContours(thresholded,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         contoursSorted = sorted(contours, key=lambda x: cv2.contourArea(x))
-        del contoursSorted[-1]
+        #del contoursSorted[-1] #only if the image is round
 
         wbclist = [item for item in contoursSorted if cv2.contourArea(item) > ImageProcessor.WBC_MIN_AREA]
         platelist = [item for item in contoursSorted if cv2.contourArea(item) > ImageProcessor.PLATES_MIN_AREA and cv2.contourArea(item) < ImageProcessor.WBC_MIN_AREA]
@@ -214,19 +214,41 @@ class ImageProcessor:
     def drawText(img, text, x, y, color):
         cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,5, color ,6,cv2.LINE_8)
 
-cv2.namedWindow("output", cv2.WINDOW_KEEPRATIO)
-resPath="resources/IMG_3643.jpg"
+    ################################################################
+    def dm3(img):
+        img_lut = ImageProcessor.lut_transform(img)
+        imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
+        imtresh = ImageProcessor.find_nucleus(imCmyk, 1)
+        wbcCount, platesCount = ImageProcessor.contouring(img, imtresh)
+        ImageProcessor.drawText(img, 'Platelet: ' + str(platesCount), 100, 200, [0, 255, 0])
+        ImageProcessor.drawText(img, 'WBC: ' + str(wbcCount), 100, 400, [0, 0, 255])
+
+        ImageProcessor.show_image(img)
+
+    def dm3_withoutContouring(img):
+        img_lut = ImageProcessor.lut_transform(img)
+        imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
+        imtresh = ImageProcessor.find_nucleus(imCmyk, 1)
+        return imtresh
+    ########################################################################
+
+cv2.namedWindow("output", cv2.WINDOW_NORMAL)
+resPath="resources/IMG_3643_rect.jpg"
 img = cv2.imread(resPath)
+img_lut = ImageProcessor.lut_transform(img)
+imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
+blur = cv2.GaussianBlur(imCmyk[:, :, 1], (9, 9), 1)
+ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+subbed=ImageProcessor.dm3_withoutContouring(img)
+kernel=np.ones((3,3),np.uint8)
+subbed_dilated=cv2.dilate(subbed,kernel,iterations=5)
+sub=cv2.subtract(th3,subbed_dilated)
+ImageProcessor.show_image(sub)
 
-img_lut=ImageProcessor.lut_transform(img)
-imCmyk=ImageProcessor.rgb_to_cmyk(img_lut)
+# eredmény a vörövértest és a citoplazma
 
-imtresh=ImageProcessor.find_nucleus(imCmyk,1,2)
-wbcCount,platesCount=ImageProcessor.contouring(img, imtresh)
-ImageProcessor.drawText(img,'Platelet: '+str(platesCount),100,200,[0,255,0])
-ImageProcessor.drawText(img,'WBC: '+str(wbcCount),100,400,[0,0,255])
 
-ImageProcessor.show_image(img)
+
 
 #########################################
 # im1=ImageProcessor.lab(img)

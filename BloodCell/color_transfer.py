@@ -17,7 +17,7 @@ def get_mean_and_std(x):
 
 def color_transfer():
 	sources = ['s1']
-	targets = ['t1']
+	targets = ['t2']
 
 	for n in range(len(sources)):
 		print("Converting picture"+str(n+1)+"...")
@@ -37,6 +37,7 @@ def color_transfer():
 					x = 0 if x<0 else x
 					x = 255 if x>255 else x
 					s[i,j,k] = x
+			print(i)
 
 		s = cv2.cvtColor(s,cv2.COLOR_LAB2BGR)
 		cv2.imwrite('resources/result/r'+str(n+1)+'.bmp',s)
