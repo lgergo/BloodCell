@@ -3,9 +3,9 @@ import cv2
 import os
 
 def read_file(sn,tn):
-	s = cv2.imread('resources/source/'+sn+'.bmp')
+	s = cv2.imread('resources/source/'+sn+'.JPG')
 	s = cv2.cvtColor(s,cv2.COLOR_BGR2LAB)
-	t = cv2.imread('resources/target/'+tn+'.bmp')
+	t = cv2.imread('resources/target/'+tn+'.JPG')
 	t = cv2.cvtColor(t,cv2.COLOR_BGR2LAB)
 	return s, t
 
@@ -17,7 +17,7 @@ def get_mean_and_std(x):
 
 def color_transfer():
 	sources = ['s1']
-	targets = ['t2']
+	targets = ['t1']
 
 	for n in range(len(sources)):
 		print("Converting picture"+str(n+1)+"...")
@@ -40,7 +40,7 @@ def color_transfer():
 			print(i)
 
 		s = cv2.cvtColor(s,cv2.COLOR_LAB2BGR)
-		cv2.imwrite('resources/result/r'+str(n+1)+'.bmp',s)
+		cv2.imwrite('resources/result/r'+str(n+1)+'.JPG',s)
 
 color_transfer()
 #os.system("pause")

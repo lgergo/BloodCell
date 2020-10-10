@@ -32,12 +32,13 @@ class ImageProcessor:
         Z = np.float32(Z)
         # define criteria, number of clusters(K) and apply kmeans()
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        ret, label, center = cv2.kmeans(Z, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        ret, label, centers = cv2.kmeans(Z, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
         # Now convert back into uint8, and make original image
-        center = np.uint8(center)
-        res = center[label.flatten()]
+        centers = np.uint8(centers)
+        res = centers[label.flatten()]
         res2 = res.reshape(image.shape)
-        return res2
+        #print('Dominant color is: bgr({})'.format(centers[0].astype(np.int32)))
+        return res2, centers
 
     def rgb_to_grayscale(image):
         img = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
@@ -232,18 +233,74 @@ class ImageProcessor:
         return imtresh
     ########################################################################
 
+    def dm_kmeans(img):
+        img_lut = ImageProcessor.lut_transform(img)
+        blur = cv2.GaussianBlur(img_lut, (9, 9), 1)
+        kmeans, centers = ImageProcessor.k_means(blur, 4)
+        # cv2.imwrite("resources/result/IMG_3643_rect_kmeans_4.jpg",kmeans)
+        centers_sorted = centers[centers[:, 2].argsort()]  # szín szerint sorba rendezem
+        # 0 - sejtmag
+        # 1 - wbc
+        # 2 - kontúr
+        # 3 - háttér
+        print(centers_sorted)
+        rbc = cv2.inRange(kmeans, centers_sorted[1], centers_sorted[2])
+
+        contours, hierarchy = cv2.findContours(rbc, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours=ImageProcessor.approxPoly(contours,0.025);
+        contoured=rbc
+        for cnt in contours:
+            cv2.drawContours(contoured, [cnt], 0, 255, -1)
+
+        # noise removal
+        kernel = np.ones((3, 3), np.uint8)
+        opening = cv2.morphologyEx(contoured, cv2.MORPH_OPEN, kernel, iterations=2)
+        # sure background area
+        sure_bg = cv2.dilate(opening, kernel, iterations=5)
+        # Finding sure foreground area
+        dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 3)
+        ret, sure_fg = cv2.threshold(dist_transform, 0.5 * dist_transform.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+
+        # Finding unknown region
+        unknown = cv2.subtract(sure_bg, sure_fg)
+
+        # Marker labelling
+        ret, markers = cv2.connectedComponents(sure_fg)
+        # Add one to all labels so that sure background is not 0, but 1
+        markers = markers + 1
+        # Now, mark the region of unknown with zero
+        markers[unknown == 255] = 0
+
+        markers = cv2.watershed(img, markers)
+        #img[markers == -1] = [0, 0, 255]
+
+        markers[markers == -1] = 0
+        lbl = markers.astype(np.uint8)
+        lbl2 = 255 - lbl
+        lbl2[lbl2 != 255] = 0
+        lbl2 = cv2.dilate(lbl2, None)
+        img[lbl2 == 255] = (0, 0, 255)
+
+        ImageProcessor.show_image(img)
+
+#---------------------------------------------------
+
 cv2.namedWindow("output", cv2.WINDOW_NORMAL)
 resPath="resources/IMG_3643_rect.jpg"
 img = cv2.imread(resPath)
-img_lut = ImageProcessor.lut_transform(img)
-imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
-blur = cv2.GaussianBlur(imCmyk[:, :, 1], (9, 9), 1)
-ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-subbed=ImageProcessor.dm3_withoutContouring(img)
-kernel=np.ones((3,3),np.uint8)
-subbed_dilated=cv2.dilate(subbed,kernel,iterations=5)
-sub=cv2.subtract(th3,subbed_dilated)
-ImageProcessor.show_image(sub)
+
+ImageProcessor.dm_kmeans(img)
+
+# img_lut = ImageProcessor.lut_transform(img)
+# imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
+# blur = cv2.GaussianBlur(imCmyk[:, :, 1], (9, 9), 1)
+# ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+# subbed=ImageProcessor.dm3_withoutContouring(img)
+# kernel=np.ones((3,3),np.uint8)
+# subbed_dilated=cv2.dilate(subbed,kernel,iterations=5)
+# sub=cv2.subtract(th3,subbed_dilated)
+# ImageProcessor.show_image(sub)
 
 # eredmény a vörövértest és a citoplazma
 
