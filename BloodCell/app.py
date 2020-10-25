@@ -3,6 +3,7 @@ import cv2
 from matplotlib import pyplot as plt
 #Python imaging library
 from PIL import Image
+from skimage.segmentation import clear_border
 
 
 class ImageProcessor:
@@ -10,15 +11,14 @@ class ImageProcessor:
     RGB_SCALE = 255
     CMYK_SCALE = 0
     WBC_MIN_AREA=1500
-    PLATES_MIN_AREA=50
+    PLATES_MIN_AREA=20
 
     def __init__(self):
         pass
 
-    def  show_image(image):
-        cv2.imshow("output", image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    def  show_image(image, name):
+        cv2.namedWindow(name,cv2.WINDOW_NORMAL)
+        cv2.imshow(name, image)
 
     def show_images_multiple(image1, image2, title1, title2):
         cv2.imshow(title1, image1)
@@ -174,8 +174,8 @@ class ImageProcessor:
         return lut_img
 
     def plotHistogram(image):
-        histg = cv2.calcHist([image], [0], None, [256], [0, 256])
-        plt.plot(histg)
+        im=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+        plt.hist(im.ravel(),256,[0,256]);
         plt.show()
 
     def find_nucleus(img, channel):
@@ -212,8 +212,16 @@ class ImageProcessor:
             approxed.append(approx)
         return approxed
 
-    def drawText(img, text, x, y, color):
-        cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,5, color ,6,cv2.LINE_8)
+    def drawText(img, text, x, color):
+        h,w,c=img.shape
+        cv2.putText(img, text, (x, h-90), cv2.FONT_HERSHEY_SIMPLEX,3, color ,6,cv2.LINE_8)
+
+    def extendImage(img):
+        h,w,c=img.shape
+        modified_height = 200
+        black = np.zeros((modified_height, h, 3), np.uint8)
+        final = np.vstack((img, black))
+        return final
 
     ################################################################
     def dm3(img):
@@ -221,8 +229,8 @@ class ImageProcessor:
         imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
         imtresh = ImageProcessor.find_nucleus(imCmyk, 1)
         wbcCount, platesCount = ImageProcessor.contouring(img, imtresh)
-        ImageProcessor.drawText(img, 'Platelet: ' + str(platesCount), 100, 200, [0, 255, 0])
-        ImageProcessor.drawText(img, 'WBC: ' + str(wbcCount), 100, 400, [0, 0, 255])
+        ImageProcessor.drawText(img, 'Platelet: ' + str(platesCount),  200, [0, 255, 0])
+        ImageProcessor.drawText(img, 'WBC: ' + str(wbcCount),  400, [0, 0, 255])
 
         ImageProcessor.show_image(img)
 
@@ -233,7 +241,7 @@ class ImageProcessor:
         return imtresh
     ########################################################################
 
-    def dm_kmeans(img):
+    def dm4_kmeans_rbc(img):
         img_lut = ImageProcessor.lut_transform(img)
         blur = cv2.GaussianBlur(img_lut, (9, 9), 1)
         kmeans, centers = ImageProcessor.k_means(blur, 4)
@@ -243,25 +251,38 @@ class ImageProcessor:
         # 1 - wbc
         # 2 - kontúr
         # 3 - háttér
-        print(centers_sorted)
-        rbc = cv2.inRange(kmeans, centers_sorted[1], centers_sorted[2])
 
+        wbcContours, plateletContours=ImageProcessor.dm4_wbc(img)
+        countRbc,rbcImage=ImageProcessor.kmeansLayerItemCount(kmeans,centers_sorted[1],centers_sorted[2])
+        img[rbcImage == 255] = (0, 255, 255)
+
+        imExt=ImageProcessor.extendImage(img);
+        ImageProcessor.drawText(imExt, 'WBC:'+str(wbcContours), 100, [0, 0, 255])
+        ImageProcessor.drawText(imExt, 'RBC: '+str(countRbc), 600, [0, 255, 255])
+        ImageProcessor.drawText(imExt, 'Platelet:'+str(plateletContours), 1300, [0, 255, 0])
+        ImageProcessor.show_image(imExt,"result")
+
+    def kmeansLayerItemCount(kmeansImage, centersFrom, centersTo):
+        rbc = cv2.inRange(kmeansImage, centersFrom, centersTo)
         contours, hierarchy = cv2.findContours(rbc, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        contours=ImageProcessor.approxPoly(contours,0.025);
-        contoured=rbc
+        contours = ImageProcessor.approxPoly(contours, 0.025);
+        contoured = rbc
         for cnt in contours:
-            cv2.drawContours(contoured, [cnt], 0, 255, -1)
+            cv2.drawContours(contoured, [cnt], 0, 255, -1)  # filling holes
 
         # noise removal
         kernel = np.ones((3, 3), np.uint8)
-        opening = cv2.morphologyEx(contoured, cv2.MORPH_OPEN, kernel, iterations=2)
-        # sure background area
-        sure_bg = cv2.dilate(opening, kernel, iterations=5)
-        # Finding sure foreground area
-        dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 3)
-        ret, sure_fg = cv2.threshold(dist_transform, 0.5 * dist_transform.max(), 255, 0)
-        sure_fg = np.uint8(sure_fg)
+        rbc = cv2.morphologyEx(rbc, cv2.MORPH_OPEN, kernel, iterations=2)
+        rbc = cv2.morphologyEx(rbc, cv2.MORPH_CLOSE, kernel, iterations=2)
 
+        # sure background area
+        sure_bg = cv2.dilate(rbc, kernel, iterations=3)
+        # Finding sure foreground area
+        dist_transform = cv2.distanceTransform(rbc, cv2.DIST_L2, 3)
+        ret, sure_fg = cv2.threshold(dist_transform, 0.55 * dist_transform.max(), 255, 0)
+
+        #sure_fg = clear_border(sure_fg)
+        sure_fg = np.uint8(sure_fg)
         # Finding unknown region
         unknown = cv2.subtract(sure_bg, sure_fg)
 
@@ -273,24 +294,34 @@ class ImageProcessor:
         markers[unknown == 255] = 0
 
         markers = cv2.watershed(img, markers)
-        #img[markers == -1] = [0, 0, 255]
+        # img[markers == -1] = [0, 0, 255]
 
         markers[markers == -1] = 0
         lbl = markers.astype(np.uint8)
         lbl2 = 255 - lbl
         lbl2[lbl2 != 255] = 0
         lbl2 = cv2.dilate(lbl2, None)
-        img[lbl2 == 255] = (0, 0, 255)
+        #img[lbl2 == 255] = (255, 0, 0)
 
-        ImageProcessor.show_image(img)
+        return ret,lbl2
+
+    def dm4_wbc(img):
+        img_lut = ImageProcessor.lut_transform(img)
+        imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
+        imtresh = ImageProcessor.find_nucleus(imCmyk, 1)
+        kernel=np.ones((9,9),np.uint8)
+        cv2.dilate(imtresh, kernel, iterations=3)
+        wbcContours,plateletContours  = ImageProcessor.contouring(img,imtresh)
+        return wbcContours, plateletContours
+
 
 #---------------------------------------------------
-
-cv2.namedWindow("output", cv2.WINDOW_NORMAL)
 resPath="resources/IMG_3643_rect.jpg"
 img = cv2.imread(resPath)
 
-ImageProcessor.dm_kmeans(img)
+
+ImageProcessor.dm4_kmeans_rbc(img)
+
 
 # img_lut = ImageProcessor.lut_transform(img)
 # imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
@@ -304,7 +335,8 @@ ImageProcessor.dm_kmeans(img)
 
 # eredmény a vörövértest és a citoplazma
 
-
+cv2.waitKey(0)
+cv2.destroyAllWindows()
 
 
 #########################################
