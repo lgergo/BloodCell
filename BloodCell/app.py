@@ -4,6 +4,9 @@ from matplotlib import pyplot as plt
 #Python imaging library
 from PIL import Image
 from skimage.segmentation import clear_border
+from skimage.feature import peak_local_max
+from skimage import data, img_as_float
+from scipy import ndimage as ndi
 
 
 class ImageProcessor:
@@ -31,7 +34,7 @@ class ImageProcessor:
         # convert to np.float32
         Z = np.float32(Z)
         # define criteria, number of clusters(K) and apply kmeans()
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 5, 10.0)
         ret, label, centers = cv2.kmeans(Z, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
         # Now convert back into uint8, and make original image
         centers = np.uint8(centers)
@@ -223,6 +226,13 @@ class ImageProcessor:
         final = np.vstack((img, black))
         return final
 
+    def enhance_cyto(img):
+        kernel = np.ones((9, 9), np.uint8)
+        imBottomHat=cv2.morphologyEx(img,cv2.MORPH_BLACKHAT,kernel, iterations=1)
+        imTopHat=cv2.morphologyEx(img,cv2.MORPH_TOPHAT,kernel,iterations=1)
+        imRes=img + imBottomHat-imTopHat
+        return imRes
+
     ################################################################
     def dm3(img):
         img_lut = ImageProcessor.lut_transform(img)
@@ -242,18 +252,17 @@ class ImageProcessor:
     ########################################################################
 
     def dm4_kmeans_rbc(img):
-        img_lut = ImageProcessor.lut_transform(img)
-        blur = cv2.GaussianBlur(img_lut, (9, 9), 1)
-        kmeans, centers = ImageProcessor.k_means(blur, 4)
-        # cv2.imwrite("resources/result/IMG_3643_rect_kmeans_4.jpg",kmeans)
+        blur = cv2.GaussianBlur(img, (9, 9), 1)
+        img_lut = ImageProcessor.lut_transform(blur)
+        kmeans, centers = ImageProcessor.k_means(img_lut, 4)
         centers_sorted = centers[centers[:, 2].argsort()]  # szín szerint sorba rendezem
         # 0 - sejtmag
         # 1 - wbc
         # 2 - kontúr
         # 3 - háttér
-
-        wbcContours, plateletContours=ImageProcessor.dm4_wbc(img)
-        countRbc,rbcImage=ImageProcessor.kmeansLayerItemCount(kmeans,centers_sorted[1],centers_sorted[2])
+        wbc=cv2.inRange(kmeans,centers_sorted[0],centers_sorted[0])
+        wbcContours, plateletContours=ImageProcessor.contourWbcAndPlatelets(img, wbc)
+        countRbc,rbcImage=ImageProcessor.contourRbc(kmeans, centers_sorted[1], centers_sorted[2])
         img[rbcImage == 255] = (0, 255, 255)
 
         imExt=ImageProcessor.extendImage(img);
@@ -262,7 +271,13 @@ class ImageProcessor:
         ImageProcessor.drawText(imExt, 'Platelet:'+str(plateletContours), 1300, [0, 255, 0])
         ImageProcessor.show_image(imExt,"result")
 
-    def kmeansLayerItemCount(kmeansImage, centersFrom, centersTo):
+    def contourWbcAndPlatelets(imgOrig, imgThres):
+        kernel=np.ones((9,9),np.uint8)
+        cv2.dilate(imgThres, kernel, iterations=5)
+        wbcContours,plateletContours  = ImageProcessor.contouring(imgOrig,imgThres)
+        return wbcContours, plateletContours
+
+    def contourRbc(kmeansImage, centersFrom, centersTo):
         rbc = cv2.inRange(kmeansImage, centersFrom, centersTo)
         contours, hierarchy = cv2.findContours(rbc, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         contours = ImageProcessor.approxPoly(contours, 0.025);
@@ -275,11 +290,31 @@ class ImageProcessor:
         rbc = cv2.morphologyEx(rbc, cv2.MORPH_OPEN, kernel, iterations=2)
         rbc = cv2.morphologyEx(rbc, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # sure background area
         sure_bg = cv2.dilate(rbc, kernel, iterations=3)
         # Finding sure foreground area
-        dist_transform = cv2.distanceTransform(rbc, cv2.DIST_L2, 3)
-        ret, sure_fg = cv2.threshold(dist_transform, 0.55 * dist_transform.max(), 255, 0)
+        dist_transform = cv2.distanceTransform(rbc, cv2.DIST_L2, cv2.DIST_MASK_3)
+        #TODO local maxima a distance transform képen
+        cv2.normalize(dist_transform, dist_transform, 0, 1, cv2.NORM_MINMAX)
+        #ImageProcessor.show_image(dist_transform,"dist")
+
+        #image_max = ndi.maximum_filter(dist_transform, size=20, mode='constant')
+        #ImageProcessor.show_image(image_max,"image_max")
+        # Comparison between image_max and im to find the coordinates of local maxima
+        coordinates = peak_local_max(dist_transform, min_distance=15)
+        empty=np.zeros(dist_transform.shape)
+        for point in coordinates:
+            cv2.circle(empty, (point[1],point[0]),10, (255, 255, 255),thickness=-1)
+
+        #TODO kivonni a wbc dilatált képét a küszöbölt rbc-ből
+
+        #cv2.imwrite("resources/result/distTransform_localMaxima.jpg", distRgb*255)
+        #ImageProcessor.show_image(dist_transform,"dist+local")
+        #TODO vége
+
+        #ret, sure_fg = cv2.threshold(dist_transform, 0.5 * dist_transform.max(), 255, 0)
+        sure_fg=empty  # TODO nem is kell küszöbölés, mivel megvannak a gócpontok?
+        ImageProcessor.show_image(sure_fg, "sure fg")
+        #cv2.imwrite("resources/result/localMaxima_100.jpg", sure_fg)
 
         #sure_fg = clear_border(sure_fg)
         sure_fg = np.uint8(sure_fg)
@@ -305,58 +340,47 @@ class ImageProcessor:
 
         return ret,lbl2
 
-    def dm4_wbc(img):
-        img_lut = ImageProcessor.lut_transform(img)
-        imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
-        imtresh = ImageProcessor.find_nucleus(imCmyk, 1)
-        kernel=np.ones((9,9),np.uint8)
-        cv2.dilate(imtresh, kernel, iterations=3)
-        wbcContours,plateletContours  = ImageProcessor.contouring(img,imtresh)
-        return wbcContours, plateletContours
+    def skimage_test(img):
+        im = img
 
+        # image_max is the dilation of im with a 20*20 structuring element
+        # It is used within peak_local_max function
+        image_max = ndi.maximum_filter(im, size=20, mode='constant')
+
+        # Comparison between image_max and im to find the coordinates of local maxima
+        coordinates = peak_local_max(im, min_distance=20)
+
+        # display results
+        fig, axes = plt.subplots(1, 3, figsize=(8, 3), sharex=True, sharey=True)
+        ax = axes.ravel()
+        ax[0].imshow(im, cmap=plt.cm.gray)
+        ax[0].axis('off')
+        ax[0].set_title('Original')
+
+        ax[1].imshow(image_max, cmap=plt.cm.gray)
+        ax[1].axis('off')
+        ax[1].set_title('Maximum filter')
+
+        ax[2].imshow(im, cmap=plt.cm.gray)
+        ax[2].autoscale(False)
+        ax[2].plot(coordinates[:, 1], coordinates[:, 0], 'r.')
+        ax[2].axis('off')
+        ax[2].set_title('Peak local max')
+
+        fig.tight_layout()
+
+        plt.show()
 
 #---------------------------------------------------
 resPath="resources/IMG_3643_rect.jpg"
 img = cv2.imread(resPath)
-
-
+#dist=cv2.imread("resources/result/distance_transform.jpg",cv2.COLOR_BGR2GRAY)
 ImageProcessor.dm4_kmeans_rbc(img)
 
+#ImageProcessor.skimage_test(dist)
 
-# img_lut = ImageProcessor.lut_transform(img)
-# imCmyk = ImageProcessor.rgb_to_cmyk(img_lut)
-# blur = cv2.GaussianBlur(imCmyk[:, :, 1], (9, 9), 1)
-# ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-# subbed=ImageProcessor.dm3_withoutContouring(img)
-# kernel=np.ones((3,3),np.uint8)
-# subbed_dilated=cv2.dilate(subbed,kernel,iterations=5)
-# sub=cv2.subtract(th3,subbed_dilated)
-# ImageProcessor.show_image(sub)
-
-# eredmény a vörövértest és a citoplazma
+#TODO bounding rect el kiszedni az adott WBC-t és beadni az AInak
+#TODO https://docs.opencv.org/3.4/dd/d49/tutorial_py_contour_features.html
 
 cv2.waitKey(0)
 cv2.destroyAllWindows()
-
-
-#########################################
-# im1=ImageProcessor.lab(img)
-# im2=ImageProcessor.xyz(img)
-# im3=ImageProcessor.hsv(img) #[0]: wcb mag és rbc de nincs cyto; [1]: CCA; [2]: nincs wbc mag
-# im4=ImageProcessor.hls(img) #[0]: wcb mag és rbc de nincs cyto; [1]: nincs wbc mag; [2]: CCA
-# im5=ImageProcessor.ycb(img)
-# im6=ImageProcessor.luv(img)
-# im7=ImageProcessor.yuv(img)
-#
-# # WCB szempontjából jó csatornák:
-# # [0] : hsv, hls, ycb, luv, yuv
-# # [1] : lab, xyz, hsv, ycb, luv, cmyk
-# # [2] : hsv, hls, yuv
-#################################################
-
-# normalize float versions
-#norm_img1 = cv2.normalize(img[:, :, channel], None, alpha=0, beta=300, norm_type=cv2.NORM_MINMAX, dtype=-1)
-# norm_img1 = cv2.normalize(img[:, :, channel], None, alpha=0, beta=1.2, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
-#norm_img1 = (255 * norm_img1).astype(np.uint8)
-
-
