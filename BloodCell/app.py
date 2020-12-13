@@ -5,11 +5,13 @@ from PIL import Image
 from matplotlib import pyplot as plt
 from skimage.feature import peak_local_max
 
-
 class ImageProcessor:
-    WBC_MIN_AREA=5000
+    WBC_MIN_AREA=1000
     RBC_MIN_AREA=1000
-    PLATES_MIN_AREA=20
+    PLATES_MIN_AREA=50
+    CATEGORIES = ["neutrophil", "lymphocyte", "monocyte", "eosinophil"]
+    TRAINED_MODEL_PATH="resources/trainedmodel/wbcClassif_1"
+    DEMO_IMAGE_PATH= "resources/IMG_3643.JPG"
 
     def __init__(self):
         pass
@@ -63,7 +65,7 @@ class ImageProcessor:
 
     def plotHistogram(image):
         im=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
-        plt.hist(im.ravel(),256,[0,256]);
+        plt.hist(im.ravel(),256,[0,256])
         plt.show()
 
     def drawText(img, text, x, color):
@@ -166,7 +168,7 @@ class ImageProcessor:
 
         maximumPoints=np.zeros(dist_transform.shape)
         for point in coordinates:
-            cv2.circle(maximumPoints, (point[1],point[0]),10, (255, 255, 255),thickness=-1)
+            cv2.circle(maximumPoints, (point[1],point[0]),15, (255, 255, 255),thickness=-1)
 
         sure_fg = np.uint8(maximumPoints)
         unknown = cv2.subtract(sure_bg, sure_fg)
@@ -180,50 +182,42 @@ class ImageProcessor:
         lbl = markers.astype(np.uint8)
         lbl2 = 255 - lbl
         lbl2[lbl2 != 255] = 0
-        lbl2 = cv2.dilate(lbl2, None)
+        kernel=np.ones((3, 3), np.uint8)
+        lbl2 = cv2.dilate(lbl2, kernel)
 
         return ret,lbl2
 
     def getBoundingRectsOfWbc(imgOriginal,img, wbcContours):
-        idx = 0
+        model = tf.keras.models.load_model(ImageProcessor.TRAINED_MODEL_PATH)
         for contour in wbcContours:
-            idx += 1
             x, y, w, h = cv2.boundingRect(contour)
             if(w>h):
                 h+=w-h
             else:
                 w+=h-w
             shift=50
-            roi = imgOriginal[y-shift:y + h+shift, x-shift:x + w+shift]
+            roi = imgOriginal[max(y-shift,0):min(y + h+shift,2100), max(x-shift,0):min(x + w+shift,2100)]
             roiSerized=cv2.resize(roi,(250,250))
-            #cv2.imwrite("resources/extractedwbc/"+str(idx) + '.jpg', roiSerized)
+
             cv2.rectangle(img,(x-shift,y-shift),(x+w+shift,y+h+shift),(200,0,0),2)
-            predictedCategory=ImageProcessor.recognise(roiSerized)
-            #TODO delte
-            if(idx==1):
-                predictedCategory="neutrophil"
+            predictedCategory=ImageProcessor.recognise(roiSerized, model)
             ImageProcessor.drawPredictForRoi(img,x-shift,y-shift,predictedCategory)
 
-    def recognise(roi):
-        #TODO 5 osztály bazofil
-        categories=["neutrophil","lymphocyte","monocyte","eopisinophil"]
-        model = tf.keras.models.load_model("resources/trainedmodel/wbcClassif_1")
+    def recognise(roi, model):
         roiReshaped=roi.reshape(1,250,250,-1)
         predict=model.predict([roiReshaped])
-
-        return categories[np.argmax(predict)]
+        return ImageProcessor.CATEGORIES[np.argmax(predict)]
 
     def bloocCellSegmentation(img):
-        imgOriginal=img.copy()
+        imgOriginal = img.copy()
         blur = cv2.GaussianBlur(img, (9, 9), 1)
         img_lut = ImageProcessor.lut_transform(blur)
         kmeans, centers = ImageProcessor.k_means(img_lut, 4)
-
         centers_sorted_bycolor = centers[centers[:, 2].argsort()]
         #0-wbc  #1-rbc 1   #2-rcb 2 contour  #3- background
 
         wbcPlateletMask=cv2.inRange(kmeans,centers_sorted_bycolor[0],centers_sorted_bycolor[0])
-        rbcMask=cv2.inRange(kmeans,centers_sorted_bycolor[1], centers_sorted_bycolor[2])
+        rbcMask=cv2.inRange(kmeans,centers_sorted_bycolor[1],centers_sorted_bycolor[1])+cv2.inRange(kmeans, centers_sorted_bycolor[2],centers_sorted_bycolor[2])
 
         (wbcContours,plateletContours) = ImageProcessor.getContourListOfWbcPlatelets(img,wbcPlateletMask)
         countRbc,rbcImage=ImageProcessor.contourRbc(kmeans, rbcMask)
@@ -232,17 +226,14 @@ class ImageProcessor:
         ImageProcessor.getBoundingRectsOfWbc(imgOriginal,img,wbcContours)
 
         imExt=ImageProcessor.extendImage(img)
-        cv2.drawContours(imExt, wbcContours, -1, (0, 0, 255), 3, cv2.LINE_4)
+        cv2.drawContours(imExt, wbcContours, -1, (0, 0, 255), 2, cv2.LINE_4)
         cv2.drawContours(imExt, plateletContours, -1, (0, 255, 0), 3, cv2.LINE_4)
         ImageProcessor.drawText(imExt, 'WBC:'+str(len(wbcContours)), 100, [0, 0, 255])
         ImageProcessor.drawText(imExt, 'RBC: '+str(countRbc), 600, [0, 255, 255])
         ImageProcessor.drawText(imExt, 'Platelet:'+str(len(plateletContours)), 1300, [0, 255, 0])
         ImageProcessor.show_image(imExt,"result")
 
-#---------------------------------------------------
-resPath="resources/IMG_3643.jpg"
-img = cv2.imread(resPath)
-
+img = cv2.imread(ImageProcessor.DEMO_IMAGE_PATH)
 ImageProcessor.bloocCellSegmentation(img)
 
 cv2.waitKey(0)
